@@ -146,16 +146,17 @@ let all_rules_with_bindable_mvr (xd:syntaxdefn) : (metavarroot * nontermroot) li
 
 (* given an ntr, does it depend on a rule where mvr was splitted? *)
 let depend_on_splitted (m:pp_mode) (xd:syntaxdefn) (ntr:nontermroot) (mvr:metavarroot) =
-  List.exists
-    (fun ntr ->
-      let r = Auxl.rule_of_ntr xd ntr in
-      List.exists 	
-	(fun p -> 
+  let deps = (List.assoc (Ntr ntr) (Auxl.select_dep_graph m xd.xd_dep)) in
+  let depend_on_directly = List.mem (Mvr mvr) deps in
+  let depend_on_indirectly =
+    let prod_depend_on p =
 	  match p.prod_es with 
-	  | [Lang_metavar (mvr1,mv1)] when is_bindable xd mv1 p -> if String.compare mvr mvr1 = 0 then true else false 
-	  | _ -> false) 
-	r.rule_ps)
-    (ntmvrlist_to_ntrlist (List.assoc (Ntr ntr) (Auxl.select_dep_graph m xd.xd_dep)))
+      | [Lang_metavar (mvr1,mv1)] when is_bindable xd mv1 p ->
+          mvr = mvr1
+      | _ -> false in
+    let ntr_depend_on n = List.exists prod_depend_on (Auxl.rule_of_ntr xd ntr).rule_ps in
+    List.exists ntr_depend_on (ntmvrlist_to_ntrlist deps) in
+  depend_on_directly || depend_on_indirectly
 
 (* true if the terms defined by ntr are always locally closed *)
 let always_locally_closed m xd ntr =
@@ -325,9 +326,15 @@ let ln_transform_rule (m:pp_mode) (xd:syntaxdefn) (r:rule) : rule =
 
     (* open r wrt all reachable r' that have a ln spliited mvr *)
     if defined_rule m r then
-      let accessible_rules = ntmvrlist_to_ntrlist (List.assoc (Ntr r.rule_ntr_name) (Auxl.select_dep_graph m xd.xd_dep)) in
+      let deps = List.assoc (Ntr r.rule_ntr_name) (Auxl.select_dep_graph m xd.xd_dep) in
+      let ntr_deps = ntmvrlist_to_ntrlist deps in
+      let accessible_rules =
+        if List.mem r.rule_ntr_name ntr_deps
+        then ntr_deps
+        else List.cons r.rule_ntr_name ntr_deps in
       let all_bindable_rules = List.map snd (all_rules_with_bindable_mvr xd) in
       let rule_wrt_to_open = List.filter (fun r -> List.mem r all_bindable_rules) accessible_rules in
+      (* TODO: does not know to open itself here *)
       ln_debug ("rule = "^r.rule_ntr_name^"; is meta = "^(string_of_bool r.rule_meta) ^"; bind_dep = "^(String.concat " , " rule_wrt_to_open));
       List.map (fun rd -> make_prod_open r rd) rule_wrt_to_open 
     else [] in
@@ -764,12 +771,18 @@ let pp_open m xd : int_funcs_collapsed =
 	List.concat (List.map 
 	  (fun r ->
 	    if defined_rule m r then 
-	      let accessible_rules = ntmvrlist_to_ntrlist (List.assoc (Ntr r.rule_ntr_name) (Auxl.select_dep_graph m xd.xd_dep)) in
+              let deps = List.assoc (Ntr r.rule_ntr_name) (Auxl.select_dep_graph m xd.xd_dep) in
+              let ntr_deps = ntmvrlist_to_ntrlist deps in
+              let accessible_rules =
+                if List.mem r.rule_ntr_name ntr_deps
+                then ntr_deps
+                else List.cons r.rule_ntr_name ntr_deps in
 	      List.concat (Auxl.option_map 
 		(fun (mvr,ntr) -> 
-		  if List.mem ntr accessible_rules
-		  then Some (pp_open_rule m xd r ntr mvr)
-		  else None)
+                  if List.mem ntr accessible_rules then
+                    Some (pp_open_rule m xd r ntr mvr)
+                  else
+                    None)
 		all_bindable_mvr_rule)
 	    else [])
 	  xd.xd_rs) in
